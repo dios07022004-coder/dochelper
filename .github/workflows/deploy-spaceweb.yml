@@ -16,18 +16,42 @@ jobs:
       - name: Ensure public_html exists
         run: mkdir -p public_html
 
+      - name: Check presence of required secrets
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_TARGET: ${{ secrets.FTP_TARGET }}
+        run: |
+          missing=0
+          for name in SITE_URL FTP_SERVER FTP_PORT FTP_USER FTP_PASSWORD FTP_TARGET; do
+            eval val=\$$name
+            if [ -z "$val" ]; then
+              echo "ERROR: secret $name is MISSING"
+              missing=1
+            else
+              echo "$name: OK"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more required secrets are missing. Add them in Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
       - name: Generate sitemap.xml
         env:
           SITE_URL: ${{ secrets.SITE_URL }}
         run: |
+          echo "Generating sitemap..."
           if [ -z "$SITE_URL" ]; then
-            echo "SITE_URL is not set. Set repository secret SITE_URL."
+            echo "SITE_URL is empty"
             exit 1
           fi
-
+          mkdir -p public_html
           echo '<?xml version="1.0" encoding="UTF-8"?>' > public_html/sitemap.xml
           echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' >> public_html/sitemap.xml
-
           if [ -d public_html/article ]; then
             find public_html/article -type f -name index.html | sort | while read -r file; do
               rel_path="${file#public_html/}"
@@ -36,15 +60,16 @@ jobs:
               echo "  <url><loc>${url}</loc></url>" >> public_html/sitemap.xml
             done
           fi
-
           echo '</urlset>' >> public_html/sitemap.xml
+          echo "Sitemap written to public_html/sitemap.xml"
 
       - name: Create robots.txt
         env:
           SITE_URL: ${{ secrets.SITE_URL }}
         run: |
+          echo "Creating robots.txt..."
           if [ -z "$SITE_URL" ]; then
-            echo "SITE_URL is not set. Set repository secret SITE_URL."
+            echo "SITE_URL is empty"
             exit 1
           fi
           cat > public_html/robots.txt <<EOF
@@ -53,6 +78,7 @@ Disallow:
 
 Sitemap: ${SITE_URL}/sitemap.xml
 EOF
+          echo "robots.txt created"
 
       - name: Install lftp
         run: |
@@ -67,15 +93,19 @@ EOF
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_TARGET: ${{ secrets.FTP_TARGET }}
         run: |
-          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_USER" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_TARGET" ]; then
-            echo "One or more FTP secrets are not set. Please set FTP_SERVER, FTP_PORT, FTP_USER, FTP_PASSWORD, FTP_TARGET."
+          echo "Starting FTP upload..."
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_PORT" ] || [ -z "$FTP_USER" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_TARGET" ]; then
+            echo "One or more FTP environment variables are empty. Aborting."
             exit 1
           fi
 
-          # Используем heredoc для команд lftp — это надёжно и не ломает YAML
-          lftp -u "${FTP_USER}","${FTP_PASSWORD}" -p "${FTP_PORT}" "${FTP_SERVER}" <<'LFTPCMD'
-set ftp:passive-mode yes
-set ftp:ssl-allow no
-mirror -R --continue --parallel=2 --verbose public_html ${FTP_TARGET}
-bye
-LFTPCMD
+          # Команда lftp со списком команд в одной строке (-e)
+          lftp -u "$FTP_USER","$FTP_PASSWORD" -p "$FTP_PORT" "$FTP_SERVER" -e "set ftp:passive-mode yes; set ftp:ssl-allow no; mirror -R --continue --parallel=2 --verbose public_html $FTP_TARGET; bye"
+          rc=$?
+          echo "lftp exit code: $rc"
+          if [ "$rc" -ne 0 ]; then
+            echo "FTP upload failed (lftp returned $rc)."
+            exit $rc
+          fi
+          echo "FTP upload finished successfully."
+
