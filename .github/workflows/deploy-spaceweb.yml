@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,8 +24,10 @@ jobs:
             echo "SITE_URL is not set. Set repository secret SITE_URL."
             exit 1
           fi
+
           echo '<?xml version="1.0" encoding="UTF-8"?>' > public_html/sitemap.xml
           echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' >> public_html/sitemap.xml
+
           if [ -d public_html/article ]; then
             find public_html/article -type f -name index.html | sort | while read -r file; do
               rel_path="${file#public_html/}"
@@ -33,12 +36,17 @@ jobs:
               echo "  <url><loc>${url}</loc></url>" >> public_html/sitemap.xml
             done
           fi
+
           echo '</urlset>' >> public_html/sitemap.xml
 
       - name: Create robots.txt
         env:
           SITE_URL: ${{ secrets.SITE_URL }}
         run: |
+          if [ -z "$SITE_URL" ]; then
+            echo "SITE_URL is not set. Set repository secret SITE_URL."
+            exit 1
+          fi
           cat > public_html/robots.txt <<EOF
 User-agent: *
 Disallow:
@@ -63,8 +71,11 @@ EOF
             echo "One or more FTP secrets are not set. Please set FTP_SERVER, FTP_PORT, FTP_USER, FTP_PASSWORD, FTP_TARGET."
             exit 1
           fi
-          lftp -u "${FTP_USER}","${FTP_PASSWORD}" -p ${FTP_PORT} ${FTP_SERVER} -e "\
-            set ftp:passive-mode yes; \
-            set ftp:ssl-allow no; \
-            mirror -R --continue --parallel=2 --verbose public_html ${FTP_TARGET}; \
-            bye"
+
+          # Используем heredoc для команд lftp — это надёжно и не ломает YAML
+          lftp -u "${FTP_USER}","${FTP_PASSWORD}" -p "${FTP_PORT}" "${FTP_SERVER}" <<'LFTPCMD'
+set ftp:passive-mode yes
+set ftp:ssl-allow no
+mirror -R --continue --parallel=2 --verbose public_html ${FTP_TARGET}
+bye
+LFTPCMD
