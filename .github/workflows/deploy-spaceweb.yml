@@ -16,7 +16,7 @@ jobs:
       - name: Ensure public_html exists
         run: mkdir -p public_html
 
-      - name: Check presence of required secrets
+      - name: Check required secrets
         env:
           SITE_URL: ${{ secrets.SITE_URL }}
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
@@ -45,11 +45,11 @@ jobs:
           SITE_URL: ${{ secrets.SITE_URL }}
         run: |
           echo "Generating sitemap..."
+          mkdir -p public_html
           if [ -z "$SITE_URL" ]; then
             echo "SITE_URL is empty"
             exit 1
           fi
-          mkdir -p public_html
           echo '<?xml version="1.0" encoding="UTF-8"?>' > public_html/sitemap.xml
           echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' >> public_html/sitemap.xml
           if [ -d public_html/article ]; then
@@ -85,27 +85,41 @@ EOF
           sudo apt-get update -y
           sudo apt-get install -y lftp
 
+      - name: Prepare lftp commands file
+        env:
+          FTP_TARGET: ${{ secrets.FTP_TARGET }}
+        run: |
+          # Создаём файл с командами для lftp — переменные будут подставлены
+          cat > /tmp/lftp_commands.txt <<EOF
+set ftp:passive-mode yes
+set ftp:ssl-allow no
+mirror -R --continue --parallel=2 --verbose public_html ${FTP_TARGET}
+bye
+EOF
+          echo "lftp commands file created at /tmp/lftp_commands.txt"
+
       - name: Upload to FTP (mirror)
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_PORT: ${{ secrets.FTP_PORT }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          FTP_TARGET: ${{ secrets.FTP_TARGET }}
         run: |
           echo "Starting FTP upload..."
-          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_PORT" ] || [ -z "$FTP_USER" ] || [ -z "$FTP_PASSWORD" ] || [ -z "$FTP_TARGET" ]; then
-            echo "One or more FTP environment variables are empty. Aborting."
+          if [ -z "$FTP_SERVER" ] || [ -z "$FTP_PORT" ] || [ -z "$FTP_USER" ] || [ -z "$FTP_PASSWORD" ]; then
+            echo "One or more FTP variables are empty. Aborting."
             exit 1
           fi
 
-          # Команда lftp со списком команд в одной строке (-e)
-          lftp -u "$FTP_USER","$FTP_PASSWORD" -p "$FTP_PORT" "$FTP_SERVER" -e "set ftp:passive-mode yes; set ftp:ssl-allow no; mirror -R --continue --parallel=2 --verbose public_html $FTP_TARGET; bye"
+          # Запуск lftp с использованием файла команд
+          lftp -u "$FTP_USER","$FTP_PASSWORD" -p "$FTP_PORT" "$FTP_SERVER" -f /tmp/lftp_commands.txt
           rc=$?
           echo "lftp exit code: $rc"
           if [ "$rc" -ne 0 ]; then
             echo "FTP upload failed (lftp returned $rc)."
             exit $rc
           fi
+          echo "FTP upload finished successfully."
+
           echo "FTP upload finished successfully."
 
